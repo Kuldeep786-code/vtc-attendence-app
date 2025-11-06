@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import LeaveApplication from './LeaveApplication';
-import HolidayCalendar from './HolidayCalendar';
+import HolidayCalender from './HolidayCalender';
 
 export default function EmployeeDashboard() {
   const [attendance, setAttendance] = useState([]);
