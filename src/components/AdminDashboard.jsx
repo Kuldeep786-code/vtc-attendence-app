@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
-import SalarySlipGenerator from './SalarySlipGenerator';
+import SalarySlipGenerator from './SalaryslipGenerator';
 
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState('enrollment');
