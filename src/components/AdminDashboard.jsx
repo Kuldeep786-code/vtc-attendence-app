@@ -1,773 +1,629 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
-import SalarySlipGenerator from './SalaryslipGenerator';
+import SalarySlipGenerator from './SalarySlipGenerator';
 
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState('enrollment');
   const [employees, setEmployees] = useState([]);
-  const [settings, setSettings] = useState({ primary_color: '#3B82F6', company_name: 'VTC Attendance App' });
-  const [attendanceRecords, setAttendanceRecords] = useState([]);
-  const [pendingLeaves, setPendingLeaves] = useState([]);
-  const [stats, setStats] = useState({
-    totalEmployees: 0,
-    presentToday: 0,
-    pendingLeaves: 0,
-    pendingApprovals: 0
+  const [newEmployee, setNewEmployee] = useState({
+    full_name: '',
+    email: '',
+    password: '',
+    role: 'employee',
+    department: ''
   });
   const [loading, setLoading] = useState(false);
-  const [selectedEmployees, setSelectedEmployees] = useState([]);
-
-  // Enrollment Form State
-  const [formData, setFormData] = useState({
-    full_name: '', email: '', password: '', role: 'employee', manager_id: ''
-  });
+  const [attendanceData, setAttendanceData] = useState([]);
+  const [leaveRequests, setLeaveRequests] = useState([]);
 
   useEffect(() => {
-    fetchAllData();
+    fetchEmployees();
+    fetchAttendanceData();
+    fetchLeaveRequests();
   }, []);
 
-  const fetchAllData = async () => {
-    setLoading(true);
-    await Promise.all([
-      fetchEmployees(),
-      fetchSettings(),
-      fetchAllAttendance(),
-      fetchPendingLeaves(),
-      fetchStats()
-    ]);
-    setLoading(false);
-  };
-
   const fetchEmployees = async () => {
-    const { data, error } = await supabase
-      .from('employees')
-      .select(`
-        *,
-        manager:employees!employees_manager_id_fkey(full_name)
-      `)
-      .order('full_name');
-    
-    if (!error) setEmployees(data || []);
-  };
-
-  const fetchSettings = async () => {
-    const { data } = await supabase.from('app_settings').select('*').single();
-    if (data) setSettings(data);
-  };
-
-  const fetchAllAttendance = async () => {
-    const { data } = await supabase
-      .from('attendance')
-      .select(`
-        *,
-        employees!inner(full_name, email, role, manager_id)
-      `)
-      .order('signin_time', { ascending: false })
-      .limit(100);
-    setAttendanceRecords(data || []);
-  };
-
-  const fetchPendingLeaves = async () => {
-    const { data } = await supabase
-      .from('leaves')
-      .select(`
-        *,
-        employees!inner(full_name, email)
-      `)
-      .eq('status', 'pending')
-      .order('applied_at', { ascending: false });
-    setPendingLeaves(data || []);
-  };
-
-  const fetchStats = async () => {
     try {
-      // Total employees
-      const { count: totalEmployees } = await supabase
+      const { data, error } = await supabase
         .from('employees')
-        .select('*', { count: 'exact', head: true });
-
-      // Present today
-      const today = new Date().toISOString().split('T')[0];
-      const { count: presentToday } = await supabase
-        .from('attendance')
-        .select('*', { count: 'exact', head: true })
-        .gte('signin_time', today)
-        .is('signout_time', null);
-
-      // Pending leaves
-      const { count: pendingLeavesCount } = await supabase
-        .from('leaves')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'pending');
-
-      // Pending approvals
-      const { count: pendingApprovals } = await supabase
-        .from('attendance')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'pending');
-
-      setStats({
-        totalEmployees: totalEmployees || 0,
-        presentToday: presentToday || 0,
-        pendingLeaves: pendingLeavesCount || 0,
-        pendingApprovals: pendingApprovals || 0
-      });
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      if (!error) {
+        setEmployees(data || []);
+      } else {
+        console.error('Error fetching employees:', error);
+      }
     } catch (error) {
-      console.error('Error fetching stats:', error);
+      console.error('Error fetching employees:', error);
     }
   };
 
-  const handleEnrollment = async (e) => {
+  const fetchAttendanceData = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('attendance')
+        .select('*')
+        .order('signin_time', { ascending: false })
+        .limit(50);
+      
+      if (!error) {
+        setAttendanceData(data || []);
+      }
+    } catch (error) {
+      console.error('Error fetching attendance:', error);
+    }
+  };
+
+  const fetchLeaveRequests = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('leave_applications')
+        .select('*, employees(full_name)')
+        .order('created_at', { ascending: false });
+      
+      if (!error) {
+        setLeaveRequests(data || []);
+      }
+    } catch (error) {
+      console.error('Error fetching leave requests:', error);
+    }
+  };
+
+  const handleAddEmployee = async (e) => {
     e.preventDefault();
     setLoading(true);
     
     try {
       // Create auth user
-      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-        email: formData.email.trim(),
-        password: formData.password,
-        email_confirm: true
-      });
-      
-      if (authError) {
-        alert('Auth Error: ' + authError.message);
-        return;
-      }
-
-      // Insert into employees table
-      const { error: dbError } = await supabase.from('employees').insert({
-        id: authData.user.id,
-        full_name: formData.full_name,
-        email: formData.email.trim(),
-        role: formData.role,
-        manager_id: formData.manager_id || null
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: newEmployee.email,
+        password: newEmployee.password,
       });
 
-      if (dbError) {
-        alert('DB Error: ' + dbError.message);
-      } else {
-        alert('Employee enrolled successfully!');
-        setFormData({ full_name: '', email: '', password: '', role: 'employee', manager_id: '' });
-        fetchEmployees();
-        fetchStats();
-      }
+      if (authError) throw authError;
+
+      // Create employee record
+      const { error: dbError } = await supabase
+        .from('employees')
+        .insert([
+          {
+            id: authData.user.id,
+            full_name: newEmployee.full_name,
+            email: newEmployee.email,
+            role: newEmployee.role,
+            department: newEmployee.department,
+            created_at: new Date().toISOString()
+          }
+        ]);
+
+      if (dbError) throw dbError;
+
+      alert('Employee added successfully!');
+      setNewEmployee({
+        full_name: '',
+        email: '',
+        password: '',
+        role: 'employee',
+        department: ''
+      });
+      fetchEmployees();
     } catch (error) {
-      alert('Error: ' + error.message);
+      console.error('Error adding employee:', error);
+      alert('Error adding employee: ' + error.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const assignManager = async (employeeId, managerId) => {
-    const { error } = await supabase
-      .from('employees')
-      .update({ manager_id: managerId })
-      .eq('id', employeeId);
+  const handleApproveLeave = async (leaveId) => {
+    try {
+      const { error } = await supabase
+        .from('leave_applications')
+        .update({ status: 'approved' })
+        .eq('id', leaveId);
 
-    if (error) {
-      alert('Error assigning manager: ' + error.message);
-    } else {
-      alert('Manager assigned successfully!');
-      fetchEmployees();
-    }
-  };
-
-  // Bulk manager assignment
-  const bulkAssignManager = async (managerId) => {
-    if (selectedEmployees.length === 0) {
-      alert('Please select employees first');
-      return;
-    }
-
-    const { error } = await supabase
-      .from('employees')
-      .update({ manager_id: managerId })
-      .in('id', selectedEmployees);
-
-    if (error) {
-      alert('Error in bulk assignment: ' + error.message);
-    } else {
-      alert(`Manager assigned to ${selectedEmployees.length} employees successfully!`);
-      setSelectedEmployees([]);
-      fetchEmployees();
-    }
-  };
-
-  const handleEmployeeSelection = (employeeId) => {
-    setSelectedEmployees(prev => 
-      prev.includes(employeeId) 
-        ? prev.filter(id => id !== employeeId)
-        : [...prev, employeeId]
-    );
-  };
-
-  const selectAllEmployees = () => {
-    if (selectedEmployees.length === employees.length) {
-      setSelectedEmployees([]);
-    } else {
-      setSelectedEmployees(employees.map(emp => emp.id));
-    }
-  };
-
-  const markAttendanceForEmployee = async (employeeId, action) => {
-    const user = await supabase.auth.getUser();
-    
-    if (action === 'signin') {
-      const { error } = await supabase.from('attendance').insert({
-        employee_id: employeeId,
-        signin_time: new Date().toISOString(),
-        status: 'approved',
-        approved_by: user.data.user.id
-      });
+      if (error) throw error;
       
-      if (error) alert('Error: ' + error.message);
-      else alert('Sign in recorded successfully!');
-    } else {
-      // Find today's active attendance
-      const today = new Date().toISOString().split('T')[0];
-      const { data: activeRecord } = await supabase
-        .from('attendance')
-        .select('id')
-        .eq('employee_id', employeeId)
-        .eq('status', 'approved')
-        .is('signout_time', null)
-        .gte('signin_time', today)
-        .single();
-
-      if (activeRecord) {
-        const { error } = await supabase
-          .from('attendance')
-          .update({ 
-            signout_time: new Date().toISOString(),
-            approved_by: user.data.user.id
-          })
-          .eq('id', activeRecord.id);
-
-        if (error) alert('Error: ' + error.message);
-        else alert('Sign out recorded successfully!');
-      } else {
-        alert('No active sign-in found for this employee today.');
-      }
-    }
-    
-    fetchAllAttendance();
-    fetchStats();
-  };
-
-  const handleLeaveApproval = async (leaveId, status) => {
-    const { error } = await supabase
-      .from('leaves')
-      .update({ 
-        status,
-        approved_by: (await supabase.auth.getUser()).data.user.id,
-        approved_at: new Date().toISOString()
-      })
-      .eq('id', leaveId);
-
-    if (error) {
-      alert('Error: ' + error.message);
-    } else {
-      alert(`Leave ${status} successfully!`);
-      fetchPendingLeaves();
-      fetchStats();
+      alert('Leave approved successfully!');
+      fetchLeaveRequests();
+    } catch (error) {
+      console.error('Error approving leave:', error);
+      alert('Error approving leave');
     }
   };
 
-  const handleAttendanceApproval = async (attendanceId, status) => {
-    const { error } = await supabase
-      .from('attendance')
-      .update({ 
-        status,
-        approved_by: (await supabase.auth.getUser()).data.user.id
-      })
-      .eq('id', attendanceId);
+  const handleRejectLeave = async (leaveId) => {
+    try {
+      const { error } = await supabase
+        .from('leave_applications')
+        .update({ status: 'rejected' })
+        .eq('id', leaveId);
 
-    if (error) {
-      alert('Error: ' + error.message);
-    } else {
-      alert(`Attendance ${status} successfully!`);
-      fetchAllAttendance();
-      fetchStats();
+      if (error) throw error;
+      
+      alert('Leave rejected!');
+      fetchLeaveRequests();
+    } catch (error) {
+      console.error('Error rejecting leave:', error);
+      alert('Error rejecting leave');
     }
   };
 
-  const saveSettings = async () => {
-    const { error } = await supabase.from('app_settings').upsert(settings);
-    if (error) alert('Error: ' + error.message);
-    else alert('Settings saved!');
-  };
-
-  const exportAttendanceCSV = () => {
-    const headers = ['Name', 'Email', 'Date', 'Sign In', 'Sign Out', 'Status'];
-    const csvData = attendanceRecords.map(record => [
-      record.employees.full_name,
-      record.employees.email,
-      new Date(record.signin_time).toLocaleDateString('en-IN'),
-      new Date(record.signin_time).toLocaleTimeString('en-IN'),
-      record.signout_time ? new Date(record.signout_time).toLocaleTimeString('en-IN') : 'Not Signed Out',
-      record.status
-    ]);
-
-    const csvContent = [headers, ...csvData].map(row => row.join(',')).join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `attendance-${new Date().toISOString().split('T')[0]}.csv`;
-    link.click();
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'approved': return '#28a745';
+      case 'rejected': return '#dc3545';
+      case 'pending': return '#ffc107';
+      default: return '#6c757d';
+    }
   };
 
   return (
-    <div className="vtc-container">
+    <div style={{ padding: '20px', maxWidth: '1400px', margin: '0 auto', minHeight: '100vh', background: '#f8f9fa' }}>
       {/* Header */}
-      <div className="vtc-header">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <h1 style={{ margin: 0 }}>VTC Attendance App</h1>
-            <p style={{ margin: 0, opacity: 0.9 }}>Admin Dashboard</p>
-          </div>
-          <button 
-            onClick={() => supabase.auth.signOut()}
-            className="vtc-btn-danger"
-          >
-            Logout
-          </button>
-        </div>
+      <div style={{ background: 'white', padding: '25px', borderRadius: '10px', boxShadow: '0 2px 10px rgba(0,0,0,0.1)', marginBottom: '25px' }}>
+        <h1 style={{ color: '#2c5aa0', marginBottom: '10px', textAlign: 'center', fontSize: '32px' }}>
+          🎯 Admin Dashboard
+        </h1>
+        <p style={{ textAlign: 'center', color: '#6c757d', fontSize: '16px' }}>
+          Complete Employee Management System
+        </p>
       </div>
 
-      {/* Stats Overview */}
-      <div className="vtc-stats-grid">
-        <div className="vtc-stat-card">
-          <h3 style={{ margin: '0 0 10px 0', color: '#666' }}>Total Employees</h3>
-          <div style={{ fontSize: '2em', fontWeight: 'bold', color: settings.primary_color }}>{stats.totalEmployees}</div>
+      {/* Stats Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px', marginBottom: '30px' }}>
+        <div style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', padding: '25px', borderRadius: '10px', textAlign: 'center' }}>
+          <h3 style={{ margin: '0 0 10px 0', fontSize: '14px', opacity: 0.9 }}>TOTAL EMPLOYEES</h3>
+          <div style={{ fontSize: '36px', fontWeight: 'bold' }}>{employees.length}</div>
         </div>
-        <div className="vtc-stat-card">
-          <h3 style={{ margin: '0 0 10px 0', color: '#666' }}>Present Today</h3>
-          <div style={{ fontSize: '2em', fontWeight: 'bold', color: '#28a745' }}>{stats.presentToday}</div>
+        
+        <div style={{ background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)', color: 'white', padding: '25px', borderRadius: '10px', textAlign: 'center' }}>
+          <h3 style={{ margin: '0 0 10px 0', fontSize: '14px', opacity: 0.9 }}>PENDING LEAVES</h3>
+          <div style={{ fontSize: '36px', fontWeight: 'bold' }}>
+            {leaveRequests.filter(leave => leave.status === 'pending').length}
+          </div>
         </div>
-        <div className="vtc-stat-card">
-          <h3 style={{ margin: '0 0 10px 0', color: '#666' }}>Pending Leaves</h3>
-          <div style={{ fontSize: '2em', fontWeight: 'bold', color: '#ffc107' }}>{stats.pendingLeaves}</div>
+        
+        <div style={{ background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)', color: 'white', padding: '25px', borderRadius: '10px', textAlign: 'center' }}>
+          <h3 style={{ margin: '0 0 10px 0', fontSize: '14px', opacity: 0.9 }}>TODAY'S ATTENDANCE</h3>
+          <div style={{ fontSize: '36px', fontWeight: 'bold' }}>
+            {attendanceData.filter(att => {
+              const today = new Date().toDateString();
+              const attDate = new Date(att.signin_time).toDateString();
+              return attDate === today;
+            }).length}
+          </div>
         </div>
-        <div className="vtc-stat-card">
-          <h3 style={{ margin: '0 0 10px 0', color: '#666' }}>Pending Approvals</h3>
-          <div style={{ fontSize: '2em', fontWeight: 'bold', color: '#dc3545' }}>{stats.pendingApprovals}</div>
+        
+        <div style={{ background: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)', color: 'white', padding: '25px', borderRadius: '10px', textAlign: 'center' }}>
+          <h3 style={{ margin: '0 0 10px 0', fontSize: '14px', opacity: 0.9 }}>ACTIVE MANAGERS</h3>
+          <div style={{ fontSize: '36px', fontWeight: 'bold' }}>
+            {employees.filter(emp => emp.role === 'manager').length}
+          </div>
         </div>
       </div>
 
       {/* Navigation Tabs */}
-      <div className="vtc-card">
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-          <button 
-            onClick={() => setActiveTab('enrollment')}
-            className={activeTab === 'enrollment' ? 'vtc-btn-primary' : ''}
-            style={{ 
-              background: activeTab === 'enrollment' ? settings.primary_color : '#f8f9fa', 
-              color: activeTab === 'enrollment' ? 'white' : 'black'
+      <div style={{ 
+        display: 'flex', 
+        gap: '8px', 
+        marginBottom: '30px',
+        background: 'white',
+        padding: '15px',
+        borderRadius: '10px',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
+        flexWrap: 'wrap'
+      }}>
+        {[
+          { id: 'enrollment', label: '👥 Employee Enrollment', icon: '👥' },
+          { id: 'management', label: '📊 Employee Management', icon: '📊' },
+          { id: 'attendance', label: '⏰ Attendance', icon: '⏰' },
+          { id: 'leaves', label: '🏖️ Leave Management', icon: '🏖️' },
+          { id: 'salary', label: '💰 Salary Slips', icon: '💰' },
+          { id: 'reports', label: '📈 Reports', icon: '📈' },
+          { id: 'settings', label: '⚙️ Settings', icon: '⚙️' }
+        ].map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            style={{
+              padding: '15px 20px',
+              background: activeTab === tab.id ? '#2c5aa0' : 'transparent',
+              color: activeTab === tab.id ? 'white' : '#2c5aa0',
+              border: `2px solid ${activeTab === tab.id ? '#2c5aa0' : '#e9ecef'}`,
+              borderRadius: '8px',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              fontSize: '14px',
+              transition: 'all 0.3s ease',
+              flex: '1',
+              minWidth: '160px'
             }}
           >
-            👥 Employee Enrollment
+            {tab.label}
           </button>
-          <button 
-            onClick={() => setActiveTab('management')}
-            className={activeTab === 'management' ? 'vtc-btn-primary' : ''}
-            style={{ 
-              background: activeTab === 'management' ? settings.primary_color : '#f8f9fa', 
-              color: activeTab === 'management' ? 'white' : 'black'
-            }}
-          >
-            🔧 Employee Management
-          </button>
-          <button 
-            onClick={() => setActiveTab('attendance')}
-            className={activeTab === 'attendance' ? 'vtc-btn-primary' : ''}
-            style={{ 
-              background: activeTab === 'attendance' ? settings.primary_color : '#f8f9fa', 
-              color: activeTab === 'attendance' ? 'white' : 'black'
-            }}
-          >
-            📊 Attendance Management
-          </button>
-          <button 
-            onClick={() => setActiveTab('leaves')}
-            className={activeTab === 'leaves' ? 'vtc-btn-primary' : ''}
-            style={{ 
-              background: activeTab === 'leaves' ? settings.primary_color : '#f8f9fa', 
-              color: activeTab === 'leaves' ? 'white' : 'black'
-            }}
-          >
-            📝 Leave Approvals ({pendingLeaves.length})
-          </button>
-          <button 
-            onClick={() => setActiveTab('salary')}
-            className={activeTab === 'salary' ? 'vtc-btn-primary' : ''}
-            style={{ 
-              background: activeTab === 'salary' ? settings.primary_color : '#f8f9fa', 
-              color: activeTab === 'salary' ? 'white' : 'black'
-            }}
-          >
-            💰 Salary Slips
-          </button>
-          <button 
-            onClick={() => setActiveTab('settings')}
-            className={activeTab === 'settings' ? 'vtc-btn-primary' : ''}
-            style={{ 
-              background: activeTab === 'settings' ? settings.primary_color : '#f8f9fa', 
-              color: activeTab === 'settings' ? 'white' : 'black'
-            }}
-          >
-            ⚙️ App Settings
-          </button>
-        </div>
+        ))}
       </div>
 
-      {/* Loading State */}
-      {loading && (
-        <div className="vtc-card" style={{ textAlign: 'center' }}>
-          <div>Loading...</div>
-        </div>
-      )}
-
-      {/* Employee Enrollment Tab */}
-      {activeTab === 'enrollment' && (
-        <div className="vtc-card">
-          <h2>👥 Enroll New Employee</h2>
-          <form onSubmit={handleEnrollment} style={{ maxWidth: '500px' }}>
-            <div style={{ marginBottom: '15px' }}>
-              <input 
-                placeholder="Full Name" 
-                value={formData.full_name} 
-                onChange={e => setFormData({...formData, full_name: e.target.value})} 
-                required 
-                style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '5px' }}
-              />
-            </div>
-            <div style={{ marginBottom: '15px' }}>
-              <input 
-                type="email" 
-                placeholder="Email" 
-                value={formData.email} 
-                onChange={e => setFormData({...formData, email: e.target.value})} 
-                required 
-                style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '5px' }}
-              />
-            </div>
-            <div style={{ marginBottom: '15px' }}>
-              <input 
-                type="password" 
-                placeholder="Password" 
-                value={formData.password} 
-                onChange={e => setFormData({...formData, password: e.target.value})} 
-                required 
-                style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '5px' }}
-              />
-            </div>
-            <div style={{ marginBottom: '15px' }}>
-              <select 
-                value={formData.role} 
-                onChange={e => setFormData({...formData, role: e.target.value})}
-                style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '5px' }}
-              >
-                <option value="employee">Employee</option>
-                <option value="manager">Manager</option>
-                <option value="admin">Admin</option>
-                <option value="hr">HR</option>
-                <option value="temp_vendor">Temp/Vendor</option>
-              </select>
-            </div>
-            <div style={{ marginBottom: '20px' }}>
-              <select 
-                value={formData.manager_id} 
-                onChange={e => setFormData({...formData, manager_id: e.target.value})}
-                style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '5px' }}
-              >
-                <option value="">Select Manager (Optional)</option>
-                {employees.filter(emp => emp.role === 'manager').map(manager => (
-                  <option key={manager.id} value={manager.id}>
-                    {manager.full_name} ({manager.email})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <button 
-              type="submit" 
-              disabled={loading}
-              className="vtc-btn-success"
-              style={{ width: '100%' }}
-            >
-              {loading ? 'Enrolling...' : 'Enroll Employee'}
-            </button>
-          </form>
-        </div>
-      )}
-
-      {/* Employee Management Tab */}
-      {activeTab === 'management' && (
-        <div className="vtc-card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-            <h2>🔧 Employee Management ({employees.length} employees)</h2>
-            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-              <div>
-                <select 
-                  onChange={(e) => bulkAssignManager(e.target.value)}
-                  style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '5px' }}
+      {/* Tab Content */}
+      <div style={{ 
+        background: 'white', 
+        padding: '30px', 
+        borderRadius: '10px', 
+        boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
+        minHeight: '500px'
+      }}>
+        
+        {/* Employee Enrollment Tab */}
+        {activeTab === 'enrollment' && (
+          <div>
+            <h2 style={{ color: '#2c5aa0', marginBottom: '25px', borderBottom: '2px solid #e9ecef', paddingBottom: '15px' }}>
+              👥 Employee Enrollment
+            </h2>
+            <form onSubmit={handleAddEmployee} style={{ maxWidth: '800px', margin: '0 auto' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '20px', marginBottom: '25px' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#495057' }}>Full Name *</label>
+                  <input
+                    type="text"
+                    value={newEmployee.full_name}
+                    onChange={(e) => setNewEmployee({...newEmployee, full_name: e.target.value})}
+                    required
+                    style={{ width: '100%', padding: '12px', border: '2px solid #dee2e6', borderRadius: '6px', fontSize: '16px' }}
+                    placeholder="Enter full name"
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#495057' }}>Email *</label>
+                  <input
+                    type="email"
+                    value={newEmployee.email}
+                    onChange={(e) => setNewEmployee({...newEmployee, email: e.target.value})}
+                    required
+                    style={{ width: '100%', padding: '12px', border: '2px solid #dee2e6', borderRadius: '6px', fontSize: '16px' }}
+                    placeholder="Enter email address"
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#495057' }}>Password *</label>
+                  <input
+                    type="password"
+                    value={newEmployee.password}
+                    onChange={(e) => setNewEmployee({...newEmployee, password: e.target.value})}
+                    required
+                    style={{ width: '100%', padding: '12px', border: '2px solid #dee2e6', borderRadius: '6px', fontSize: '16px' }}
+                    placeholder="Set password"
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#495057' }}>Role *</label>
+                  <select
+                    value={newEmployee.role}
+                    onChange={(e) => setNewEmployee({...newEmployee, role: e.target.value})}
+                    style={{ width: '100%', padding: '12px', border: '2px solid #dee2e6', borderRadius: '6px', fontSize: '16px' }}
+                  >
+                    <option value="employee">Employee</option>
+                    <option value="manager">Manager</option>
+                    <option value="admin">Admin</option>
+                    <option value="hr">HR Manager</option>
+                  </select>
+                </div>
+                <div style={{ gridColumn: 'span 2' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#495057' }}>Department</label>
+                  <input
+                    type="text"
+                    value={newEmployee.department}
+                    onChange={(e) => setNewEmployee({...newEmployee, department: e.target.value})}
+                    style={{ width: '100%', padding: '12px', border: '2px solid #dee2e6', borderRadius: '6px', fontSize: '16px' }}
+                    placeholder="Enter department"
+                  />
+                </div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  style={{
+                    padding: '15px 40px',
+                    background: loading ? '#6c757d' : '#28a745',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontSize: '16px',
+                    fontWeight: 'bold',
+                    cursor: loading ? 'not-allowed' : 'pointer',
+                    minWidth: '200px'
+                  }}
                 >
-                  <option value="">Bulk Assign Manager</option>
-                  {employees.filter(emp => emp.role === 'manager').map(manager => (
-                    <option key={manager.id} value={manager.id}>
-                      {manager.full_name}
-                    </option>
-                  ))}
-                </select>
+                  {loading ? '⏳ Adding Employee...' : '➕ Add Employee'}
+                </button>
               </div>
-              <div style={{ fontSize: '14px', color: '#666' }}>
-                Selected: {selectedEmployees.length}
-              </div>
-            </div>
+            </form>
           </div>
+        )}
 
-          <div style={{ marginBottom: '15px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <input 
-                type="checkbox" 
-                checked={selectedEmployees.length === employees.length && employees.length > 0}
-                onChange={selectAllEmployees}
-              />
-              Select All
-            </label>
-          </div>
-
-          <div style={{ display: 'grid', gap: '15px' }}>
-            {employees.map(employee => (
-              <div key={employee.id} className="vtc-card" style={{ 
-                background: selectedEmployees.includes(employee.id) ? '#f0f8ff' : 'white'
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                    <input 
-                      type="checkbox"
-                      checked={selectedEmployees.includes(employee.id)}
-                      onChange={() => handleEmployeeSelection(employee.id)}
-                    />
-                    <div>
-                      <strong>{employee.full_name}</strong> - {employee.email}
-                      <br />
-                      <span style={{ 
-                        background: employee.role === 'admin' ? '#dc3545' : 
-                                   employee.role === 'manager' ? '#007bff' : '#28a745',
-                        color: 'white',
-                        padding: '2px 8px',
-                        borderRadius: '10px',
-                        fontSize: '12px',
-                        marginLeft: '10px'
-                      }}>
-                        {employee.role}
-                      </span>
-                      {employee.manager && (
-                        <span style={{ marginLeft: '10px', color: '#666' }}>
-                          Manager: {employee.manager.full_name}
+        {/* Employee Management Tab */}
+        {activeTab === 'management' && (
+          <div>
+            <h2 style={{ color: '#2c5aa0', marginBottom: '25px', borderBottom: '2px solid #e9ecef', paddingBottom: '15px' }}>
+              📊 Employee Management ({employees.length} Employees)
+            </h2>
+            <div style={{ overflowX: 'auto', background: '#f8f9fa', borderRadius: '8px', padding: '10px' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', background: 'white', borderRadius: '8px', overflow: 'hidden' }}>
+                <thead>
+                  <tr style={{ background: '#2c5aa0', color: 'white' }}>
+                    <th style={{ padding: '15px', textAlign: 'left', fontSize: '14px', fontWeight: 'bold' }}>Employee</th>
+                    <th style={{ padding: '15px', textAlign: 'left', fontSize: '14px', fontWeight: 'bold' }}>Contact</th>
+                    <th style={{ padding: '15px', textAlign: 'left', fontSize: '14px', fontWeight: 'bold' }}>Role</th>
+                    <th style={{ padding: '15px', textAlign: 'left', fontSize: '14px', fontWeight: 'bold' }}>Department</th>
+                    <th style={{ padding: '15px', textAlign: 'left', fontSize: '14px', fontWeight: 'bold' }}>Join Date</th>
+                    <th style={{ padding: '15px', textAlign: 'center', fontSize: '14px', fontWeight: 'bold' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {employees.map((employee, index) => (
+                    <tr key={employee.id} style={{ borderBottom: '1px solid #dee2e6', background: index % 2 === 0 ? '#f8f9fa' : 'white' }}>
+                      <td style={{ padding: '15px', fontWeight: 'bold' }}>{employee.full_name}</td>
+                      <td style={{ padding: '15px' }}>{employee.email}</td>
+                      <td style={{ padding: '15px' }}>
+                        <span style={{ 
+                          padding: '6px 12px', 
+                          borderRadius: '20px', 
+                          fontSize: '12px',
+                          fontWeight: 'bold',
+                          background: employee.role === 'admin' ? '#dc3545' : 
+                                    employee.role === 'manager' ? '#fd7e14' : 
+                                    employee.role === 'hr' ? '#20c997' : '#6f42c1',
+                          color: 'white'
+                        }}>
+                          {employee.role.toUpperCase()}
                         </span>
-                      )}
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                    <select 
-                      value={employee.manager_id || ''}
-                      onChange={(e) => assignManager(employee.id, e.target.value)}
-                      style={{ padding: '5px', border: '1px solid #ddd', borderRadius: '3px' }}
-                    >
-                      <option value="">No Manager</option>
-                      {employees
-                        .filter(emp => emp.role === 'manager' && emp.id !== employee.id)
-                        .map(manager => (
-                          <option key={manager.id} value={manager.id}>
-                            {manager.full_name}
-                          </option>
-                        ))
-                      }
-                    </select>
-                    <button 
-                      onClick={() => markAttendanceForEmployee(employee.id, 'signin')}
-                      className="vtc-btn-success"
-                      style={{ padding: '5px 10px' }}
-                    >
-                      Sign In
-                    </button>
-                    <button 
-                      onClick={() => markAttendanceForEmployee(employee.id, 'signout')}
-                      className="vtc-btn-danger"
-                      style={{ padding: '5px 10px' }}
-                    >
-                      Sign Out
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Attendance Management Tab */}
-      {activeTab === 'attendance' && (
-        <div className="vtc-card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-            <h2>📊 Attendance Management</h2>
-            <button 
-              onClick={exportAttendanceCSV}
-              className="vtc-btn-primary"
-            >
-              📥 Export CSV
-            </button>
-          </div>
-          
-          <div style={{ display: 'grid', gap: '10px' }}>
-            {attendanceRecords.map(record => (
-              <div key={record.id} className="vtc-card" style={{ 
-                background: record.status === 'approved' ? '#f0fff0' : 
-                           record.status === 'rejected' ? '#fff0f0' : '#fffaf0'
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <strong>{record.employees.full_name}</strong> ({record.employees.role})
-                    <br />
-                    <span>Date: {new Date(record.signin_time).toLocaleDateString('en-IN')}</span>
-                    <br />
-                    <span>Time: {new Date(record.signin_time).toLocaleTimeString('en-IN')}</span>
-                    {record.signout_time && (
-                      <span> to {new Date(record.signout_time).toLocaleTimeString('en-IN')}</span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                    <span style={{
-                      background: record.status === 'approved' ? '#28a745' : 
-                                 record.status === 'rejected' ? '#dc3545' : '#ffc107',
-                      color: 'white',
-                      padding: '3px 10px',
-                      borderRadius: '15px',
-                      fontSize: '12px'
-                    }}>
-                      {record.status}
-                    </span>
-                    {record.signin_selfie_url && (
-                      <a href={record.signin_selfie_url} target="_blank" rel="noopener noreferrer" style={{ marginLeft: '10px' }}>
-                        👤 View Selfie
-                      </a>
-                    )}
-                    {record.status === 'pending' && (
-                      <div style={{ display: 'flex', gap: '5px' }}>
-                        <button 
-                          onClick={() => handleAttendanceApproval(record.id, 'approved')}
-                          className="vtc-btn-success"
-                          style={{ padding: '3px 8px', fontSize: '12px' }}
-                        >
-                          ✓
+                      </td>
+                      <td style={{ padding: '15px' }}>{employee.department || 'Not assigned'}</td>
+                      <td style={{ padding: '15px' }}>
+                        {employee.created_at ? new Date(employee.created_at).toLocaleDateString() : 'N/A'}
+                      </td>
+                      <td style={{ padding: '15px', textAlign: 'center' }}>
+                        <button style={{ 
+                          padding: '8px 16px', 
+                          marginRight: '8px', 
+                          background: '#ffc107', 
+                          color: 'black', 
+                          border: 'none', 
+                          borderRadius: '5px',
+                          cursor: 'pointer',
+                          fontSize: '12px',
+                          fontWeight: 'bold'
+                        }}>
+                          ✏️ Edit
                         </button>
-                        <button 
-                          onClick={() => handleAttendanceApproval(record.id, 'rejected')}
-                          className="vtc-btn-danger"
-                          style={{ padding: '3px 8px', fontSize: '12px' }}
-                        >
-                          ✗
+                        <button style={{ 
+                          padding: '8px 16px', 
+                          background: '#dc3545', 
+                          color: 'white', 
+                          border: 'none', 
+                          borderRadius: '5px',
+                          cursor: 'pointer',
+                          fontSize: '12px',
+                          fontWeight: 'bold'
+                        }}>
+                          🗑️ Delete
                         </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Leave Approvals Tab */}
-      {activeTab === 'leaves' && (
-        <div className="vtc-card">
-          <h2>📝 Leave Approvals ({pendingLeaves.length})</h2>
-          {pendingLeaves.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
-              No pending leave applications
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          ) : (
-            <div style={{ display: 'grid', gap: '15px' }}>
-              {pendingLeaves.map(leave => (
-                <div key={leave.id} className="vtc-card" style={{ background: '#fffaf0' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div>
-                      <div style={{ fontSize: '18px', fontWeight: 'bold' }}>
-                        {leave.employees.full_name} - {leave.employees.email}
-                      </div>
-                      <div><strong>Dates:</strong> {leave.start_date} to {leave.end_date}</div>
-                      <div><strong>Type:</strong> {leave.leave_type}</div>
-                      <div><strong>Reason:</strong> {leave.reason}</div>
-                      {leave.document_url && (
-                        <div>
-                          <strong>Document:</strong>{' '}
-                          <a href={leave.document_url} target="_blank" rel="noopener noreferrer">
-                            📎 View Document
-                          </a>
-                        </div>
-                      )}
-                      <div style={{ marginTop: '10px', fontSize: '14px', color: '#666' }}>
-                        Applied on: {new Date(leave.applied_at).toLocaleDateString('en-IN')}
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '10px' }}>
-                      <button 
-                        onClick={() => handleLeaveApproval(leave.id, 'approved')}
-                        className="vtc-btn-success"
-                      >
-                        ✓ Approve
-                      </button>
-                      <button 
-                        onClick={() => handleLeaveApproval(leave.id, 'rejected')}
-                        className="vtc-btn-danger"
-                      >
-                        ✗ Reject
-                      </button>
-                    </div>
+          </div>
+        )}
+
+        {/* Attendance Tab */}
+        {activeTab === 'attendance' && (
+          <div>
+            <h2 style={{ color: '#2c5aa0', marginBottom: '25px', borderBottom: '2px solid #e9ecef', paddingBottom: '15px' }}>
+              ⏰ Attendance Management
+            </h2>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#f8f9fa' }}>
+                    <th style={{ padding: '12px', border: '1px solid #dee2e6', textAlign: 'left' }}>Employee</th>
+                    <th style={{ padding: '12px', border: '1px solid #dee2e6', textAlign: 'left' }}>Sign In</th>
+                    <th style={{ padding: '12px', border: '1px solid #dee2e6', textAlign: 'left' }}>Sign Out</th>
+                    <th style={{ padding: '12px', border: '1px solid #dee2e6', textAlign: 'left' }}>Hours</th>
+                    <th style={{ padding: '12px', border: '1px solid #dee2e6', textAlign: 'left' }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {attendanceData.slice(0, 10).map(record => (
+                    <tr key={record.id}>
+                      <td style={{ padding: '12px', border: '1px solid #dee2e6' }}>{record.employee_id}</td>
+                      <td style={{ padding: '12px', border: '1px solid #dee2e6' }}>
+                        {new Date(record.signin_time).toLocaleString()}
+                      </td>
+                      <td style={{ padding: '12px', border: '1px solid #dee2e6' }}>
+                        {record.signout_time ? new Date(record.signout_time).toLocaleString() : 'Not signed out'}
+                      </td>
+                      <td style={{ padding: '12px', border: '1px solid #dee2e6' }}>
+                        {record.signout_time ? 
+                          ((new Date(record.signout_time) - new Date(record.signin_time)) / (1000 * 60 * 60)).toFixed(2) + ' hrs' : 
+                          'N/A'
+                        }
+                      </td>
+                      <td style={{ padding: '12px', border: '1px solid #dee2e6' }}>
+                        <span style={{ 
+                          padding: '4px 8px', 
+                          borderRadius: '4px', 
+                          fontSize: '12px',
+                          background: record.status === 'approved' ? '#28a745' : '#ffc107',
+                          color: 'white'
+                        }}>
+                          {record.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {attendanceData.length === 0 && (
+              <div style={{ textAlign: 'center', padding: '40px', color: '#6c757d' }}>
+                <p>No attendance records found.</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Leave Management Tab */}
+        {activeTab === 'leaves' && (
+          <div>
+            <h2 style={{ color: '#2c5aa0', marginBottom: '25px', borderBottom: '2px solid #e9ecef', paddingBottom: '15px' }}>
+              🏖️ Leave Management
+            </h2>
+            <div style={{ display: 'grid', gap: '20px' }}>
+              {leaveRequests.map(leave => (
+                <div key={leave.id} style={{ 
+                  background: '#f8f9fa', 
+                  padding: '20px', 
+                  borderRadius: '8px', 
+                  border: `2px solid ${getStatusColor(leave.status)}` 
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                    <h4 style={{ margin: 0, color: '#2c5aa0' }}>
+                      {leave.employees?.full_name || 'Unknown Employee'}
+                    </h4>
+                    <span style={{ 
+                      padding: '6px 12px', 
+                      borderRadius: '20px', 
+                      fontSize: '12px',
+                      fontWeight: 'bold',
+                      background: getStatusColor(leave.status),
+                      color: 'white'
+                    }}>
+                      {leave.status.toUpperCase()}
+                    </span>
                   </div>
+                  <p><strong>Reason:</strong> {leave.reason}</p>
+                  <p><strong>From:</strong> {new Date(leave.start_date).toLocaleDateString()} 
+                     <strong> To:</strong> {new Date(leave.end_date).toLocaleDateString()}</p>
+                  <p><strong>Total Days:</strong> {leave.total_days}</p>
+                  
+                  {leave.status === 'pending' && (
+                    <div style={{ marginTop: '15px', display: 'flex', gap: '10px' }}>
+                      <button 
+                        onClick={() => handleApproveLeave(leave.id)}
+                        style={{
+                          padding: '10px 20px',
+                          background: '#28a745',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '5px',
+                          cursor: 'pointer',
+                          fontWeight: 'bold'
+                        }}
+                      >
+                        ✅ Approve
+                      </button>
+                      <button 
+                        onClick={() => handleRejectLeave(leave.id)}
+                        style={{
+                          padding: '10px 20px',
+                          background: '#dc3545',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '5px',
+                          cursor: 'pointer',
+                          fontWeight: 'bold'
+                        }}
+                      >
+                        ❌ Reject
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
+              {leaveRequests.length === 0 && (
+                <div style={{ textAlign: 'center', padding: '40px', color: '#6c757d' }}>
+                  <p>No leave requests found.</p>
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      )}
-
-      {/* Salary Slips Tab */}
-      {activeTab === 'salary' && <SalarySlipGenerator />}
-
-      {/* Settings Tab */}
-      {activeTab === 'settings' && (
-        <div className="vtc-card">
-          <h2>⚙️ App Settings</h2>
-          <div style={{ maxWidth: '500px' }}>
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Primary Color: </label>
-              <input 
-                type="color" 
-                value={settings.primary_color} 
-                onChange={e => setSettings({...settings, primary_color: e.target.value})} 
-                style={{ width: '100px', height: '40px' }}
-              />
-            </div>
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Company Name: </label>
-              <input 
-                value={settings.company_name} 
-                onChange={e => setSettings({...settings, company_name: e.target.value})}
-                style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '5px' }}
-              />
-            </div>
-            <button 
-              onClick={saveSettings}
-              className="vtc-btn-primary"
-            >
-              Save Settings
-            </button>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Salary Slips Tab */}
+        {activeTab === 'salary' && (
+          <div>
+            <h2 style={{ color: '#2c5aa0', marginBottom: '25px', borderBottom: '2px solid #e9ecef', paddingBottom: '15px' }}>
+              💰 Salary Slip Management
+            </h2>
+            <SalarySlipGenerator />
+          </div>
+        )}
+
+        {/* Reports Tab */}
+        {activeTab === 'reports' && (
+          <div>
+            <h2 style={{ color: '#2c5aa0', marginBottom: '25px', borderBottom: '2px solid #e9ecef', paddingBottom: '15px' }}>
+              📈 Reports & Analytics
+            </h2>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
+              <div style={{ background: '#e8f5e8', padding: '20px', borderRadius: '8px' }}>
+                <h4 style={{ color: '#28a745' }}>📊 Attendance Summary</h4>
+                <p>Total Records: {attendanceData.length}</p>
+                <p>Approved: {attendanceData.filter(a => a.status === 'approved').length}</p>
+                <p>Pending: {attendanceData.filter(a => a.status === 'pending').length}</p>
+              </div>
+              
+              <div style={{ background: '#e8f2ff', padding: '20px', borderRadius: '8px' }}>
+                <h4 style={{ color: '#2c5aa0' }}>👥 Employee Statistics</h4>
+                <p>Total Employees: {employees.length}</p>
+                <p>Managers: {employees.filter(e => e.role === 'manager').length}</p>
+                <p>HR: {employees.filter(e => e.role === 'hr').length}</p>
+              </div>
+              
+              <div style={{ background: '#ffe8e8', padding: '20px', borderRadius: '8px' }}>
+                <h4 style={{ color: '#dc3545' }}>🏖️ Leave Overview</h4>
+                <p>Total Requests: {leaveRequests.length}</p>
+                <p>Approved: {leaveRequests.filter(l => l.status === 'approved').length}</p>
+                <p>Pending: {leaveRequests.filter(l => l.status === 'pending').length}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Settings Tab */}
+        {activeTab === 'settings' && (
+          <div>
+            <h2 style={{ color: '#2c5aa0', marginBottom: '25px', borderBottom: '2px solid #e9ecef', paddingBottom: '15px' }}>
+              ⚙️ System Settings
+            </h2>
+            <div style={{ maxWidth: '600px' }}>
+              <div style={{ marginBottom: '20px' }}>
+                <h4>Company Information</h4>
+                <p>Configure company details, policies, and system settings.</p>
+              </div>
+              
+              <div style={{ marginBottom: '20px' }}>
+                <h4>Attendance Settings</h4>
+                <p>Set working hours, overtime rules, and attendance policies.</p>
+              </div>
+              
+              <div style={{ marginBottom: '20px' }}>
+                <h4>Leave Policies</h4>
+                <p>Configure leave types, limits, and approval workflows.</p>
+              </div>
+              
+              <div>
+                <h4>Salary Structure</h4>
+                <p>Set up salary components, deductions, and tax rules.</p>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
